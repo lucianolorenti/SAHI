@@ -94,7 +94,7 @@ def split_image_in_windows(
     """
 
     def valid_proportion(v: float) -> bool:
-        return v >= 0 and v <= 1
+        return v >= 0 and v < 1
 
     if not valid_proportion(overlapping_prportion[0]) or not valid_proportion(
         overlapping_prportion[1]
@@ -102,8 +102,8 @@ def split_image_in_windows(
         raise ValueError("Overlapping proportion should be between 0 and 1.")
     patches = []
     h, w, _ = img.shape
-    stride_x = int(patch_size[0] * overlapping_prportion[0])
-    stride_y = int(patch_size[1] * overlapping_prportion[1])
+    stride_x = int(patch_size[0] * (1-overlapping_prportion[0]))
+    stride_y = int(patch_size[1] * (1-overlapping_prportion[1]))
     for i in range(0, h, stride_y):
         for j in range(0, w, stride_x):
             rows_start = i

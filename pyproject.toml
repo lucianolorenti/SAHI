@@ -1,28 +1,28 @@
 [project]
 name = "sahi"
 version = "0.1.0"
-description = "Add your description here"
+description = "A simple implemntation of Slicing Aided Hyper Inference"
 readme = "README.md"
 authors = [
     { name = "Luciano Lorenti", email = "lucianolorenti@gmail.com" }
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "keras>=2.14.0",
-    "keras-cv>=0.9.0",
-    "numpy<2",
-    "pillow>=11.1.0",
-    "tensorflow>=2.14.0",
-    "tqdm>=4.67.1",
+    "numpy>=1.14",
+    "pillow>=11.1.0"
 ]
 
 [project.optional-dependencies]
 examples = [
    "tensorflow>=2.14.0",
     "keras>=2.14.0",
-        "matplotlib>=3.10.1",
-            "ipykernel>=6.29.5",
+    "matplotlib>=3.10.1",
+    "ipykernel>=6.29.5",
     "jupyter>=1.1.1",
+    "keras>=2.14.0",
+    "keras-cv>=0.9.0",
+    "tensorflow>=2.14.0",
+    "tqdm>=4.67.1"
 ]
 
 [project.scripts]

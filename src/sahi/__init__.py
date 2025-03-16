@@ -117,24 +117,6 @@ def split_image_in_windows(
     return patches
 
 
-def map_bb_to_original_image(
-    bb: np.ndarray, patch: ImagePatch, original_image: Tuple[int, int]
-) -> np.ndarray:
-    """Maps the bounding box to the original image.
-
-    Args:
-        bb (np.ndarray): Bounding box in formta xywh
-        patch (ImagePatch): Image patch
-        original_image (Tuple[int, int]): Original image size
-
-    Returns:
-        np.ndarray: Mapped bounding box
-    """
-    h, w = original_image
-    x, y, w, h = bb
-    x += patch.starting_col
-    y += patch.starting_row
-    return np.array([x, y, w, h])
 
 
 @dataclass
@@ -160,7 +142,10 @@ def sahi_predict(model, img: np.ndarray, config: SAHIConfig):
             target_size=config.model_image_size
         )
 
-    images_to_predict = np.concatenate([np.expand_dims(patch.target_img, 0) for patch in patches])
+
+    images_to_predict = np.concatenate([
+        np.expand_dims(patch.target_img, 0) for patch in patches
+    ] )
     bbs = model.predict(images_to_predict, batch_size=len(images_to_predict))
 
     n_patches = len(patches)

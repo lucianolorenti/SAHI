@@ -26,7 +26,7 @@ class ImagePatch:
         self.starting_row = starting_row
         self.starting_col = starting_col
         self.padding_rescaled_left = 0
-        self.padding_resclaed_top = 0
+        self.padding_rescaled_top = 0
         self.scaling_factor = 1.0
 
     def rescaling_preserving_aspect_ratio(
@@ -56,7 +56,7 @@ class ImagePatch:
         result.paste(image, (left, top))
         self.target_img = np.array(result)
         self.padding_rescaled_left = left
-        self.padding_resclaed_top = top
+        self.padding_rescaled_top = top
         self.scaling_factor = scaling_factor
         return self
     
@@ -70,7 +70,7 @@ class ImagePatch:
             np.ndarray: Mapped bounding boxes
         """
         bbs[:, 0] -= self.padding_rescaled_left
-        bbs[:, 1] -= self.padding_resclaed_top        
+        bbs[:, 1] -= self.padding_rescaled_top        
         bbs /= self.scaling_factor
         bbs[:, 0] += self.starting_col
         bbs[:, 1] += self.starting_row

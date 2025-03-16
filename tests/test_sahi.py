@@ -1,4 +1,4 @@
-from sahi import ImagePatch, split_image_in_windows
+from sahi import ImagePatch, iou_of_boxes, split_image_in_windows
 import numpy as np
 
 
@@ -72,3 +72,22 @@ def test_bb_mapping():
     assert mapped_bb[3] == 30 / 3
 
 
+def test_iou():
+
+    origin_box = np.array([0, 0, 100, 100])
+    boxes = np.array([
+            [0, 0, 100, 100],
+            [0, 0, 50, 50],
+            [0, 0, 100, 50],
+            [50, 50, 100, 100],
+            [150, 150, 100, 100],
+
+    ])
+
+    iou = iou_of_boxes(
+        origin_box,
+        boxes
+    )
+    expected_iou = np.array([1, 0.25, 0.5, 50*50 / ((100*100)*2 - 50*50), 0])
+    assert (iou-expected_iou).sum() < 1e-6
+    assert iou.shape == (5,)

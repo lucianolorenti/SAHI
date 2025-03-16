@@ -6,17 +6,63 @@ original image can be applied to detect larger objects.
 Finally, the overlapping prediction results and, if used, FI results are merged back into to original size using NMS. During NMS, boxes having higher Intersection over Union (IoU) ratios than a predefined matching threshold $T_m$ are matched and for each match, detections having detection probability than lower than $T_d$ are remov"
 """
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import List, Optional, Tuple
+
 import numpy as np
-import tensorflow as tf
-from typing import Tuple, List
 import PIL
 from PIL import Image
-import logging 
 
 logger = logging.getLogger(__name__)
 SAHI_HOME = Path(__file__).parent.parent
+
+
+@dataclass
+class SAHIConfig:
+    patch_size: Tuple[int, int] = (300, 300)
+    overlapping_prportion: Tuple[float, float] = (0.5, 0.5)
+    model_image_size: Tuple[int, int] = (300, 300)
+    use_whole_image: bool = True
+    iou_threshold: float = 0.5
+    batch_size: Optional[int] = None
+
+
+@dataclass
+class ModelPredictions:
+    num_detections: int
+    boxes: np.ndarray
+    confidence: np.ndarray
+    classes: np.ndarray
+
+
+def resize_and_pad(
+    img: np.ndarray, target_size: Tuple[int, int]
+) -> Tuple[np.ndarray, Tuple[int, int], float]:
+    """Reize the image while preserving the aspect ratio and padding the image.
+
+    Args:
+        img (np.ndarray): Image
+        target_size (Tuple[int, int]): Target size
+
+    Returns:
+        Tuple[np.ndarray, Tuple[int, int], float]: Resized image, padding used, scaling factor
+    """
+    orign_nrows, origin_ncols = img.shape[:2]
+    target_ncols, target_nrows = target_size
+    scaling_factor = min(target_nrows / orign_nrows, target_ncols / origin_ncols)
+    concrete_target_size = (
+        int(origin_ncols * scaling_factor),
+        int(orign_nrows * scaling_factor),
+    )
+    image = PIL.Image.fromarray(img).resize(concrete_target_size)
+    result = PIL.Image.new(image.mode, target_size, (0, 0, 0))
+    top = (target_size[1] - concrete_target_size[1]) // 2
+    left = (target_size[0] - concrete_target_size[0]) // 2
+    result.paste(image, (left, top))
+    return np.array(result), (left, top), scaling_factor
 
 
 class ImagePatch:
@@ -42,24 +88,15 @@ class ImagePatch:
             Tuple[PIL.Image, Tuple[int, int]]: Rescaled image and the padding used
         """
 
-        orign_nrows, origin_ncols = self.img.shape[:2]
-        target_ncols, target_nrows = target_size
-        scaling_factor = min(target_nrows / orign_nrows, target_ncols / origin_ncols)
-        concrete_target_size = (
-            int(origin_ncols * scaling_factor),
-            int(orign_nrows * scaling_factor),
+        self.target_img, (left, top), scaling_factor = resize_and_pad(
+            self.img, target_size
         )
-        image = PIL.Image.fromarray(self.img).resize(concrete_target_size)
-        result = Image.new(image.mode, target_size, (0, 0, 0))
-        top = (target_size[1] - concrete_target_size[1]) // 2
-        left = (target_size[0] - concrete_target_size[0]) // 2
-        result.paste(image, (left, top))
-        self.target_img = np.array(result)
+
         self.padding_rescaled_left = left
         self.padding_rescaled_top = top
         self.scaling_factor = scaling_factor
         return self
-    
+
     def map_bbs_to_original_image_coordinates(self, bbs: np.ndarray) -> np.ndarray:
         """Maps the bounding boxes to the original image coordinates.
 
@@ -70,7 +107,7 @@ class ImagePatch:
             np.ndarray: Mapped bounding boxes
         """
         bbs[:, 0] -= self.padding_rescaled_left
-        bbs[:, 1] -= self.padding_rescaled_top        
+        bbs[:, 1] -= self.padding_rescaled_top
         bbs /= self.scaling_factor
         bbs[:, 0] += self.starting_col
         bbs[:, 1] += self.starting_row
@@ -102,8 +139,8 @@ def split_image_in_windows(
         raise ValueError("Overlapping proportion should be between 0 and 1.")
     patches = []
     h, w, _ = img.shape
-    stride_x = int(patch_size[0] * (1-overlapping_prportion[0]))
-    stride_y = int(patch_size[1] * (1-overlapping_prportion[1]))
+    stride_x = int(patch_size[0] * (1 - overlapping_prportion[0]))
+    stride_y = int(patch_size[1] * (1 - overlapping_prportion[1]))
     for i in range(0, h, stride_y):
         for j in range(0, w, stride_x):
             rows_start = i
@@ -117,61 +154,216 @@ def split_image_in_windows(
     return patches
 
 
+def prepare_patches(
+    patches: List[ImagePatch], img: np.ndarray, config: SAHIConfig
+) -> List[ImagePatch]:
+    """Prepares the patches for the model.
+
+    Resize the patches to the required model image size preserving the aspect ratio.
+    Also adds the whole image if required.
+
+    Args:
+        patches (List[ImagePatch]): List of image patches
+        img (np.ndarray): Original image
+        config (SAHIConfig): SAHI Configuration
+
+    Returns:
+        List[ImagePatch]: List of image patches prepared for the model
+    """
+    for patch in patches:
+        patch.rescaling_preserving_aspect_ratio(target_size=config.model_image_size)
+    if config.use_whole_image:
+        patches.append(
+            ImagePatch(
+                img=img, starting_row=0, starting_col=0
+            ).rescaling_preserving_aspect_ratio(target_size=config.model_image_size)
+        )
+    return patches
 
 
-@dataclass
-class SAHIConfig:
-    patch_size: Tuple[int, int] = (300, 300)
-    overlapping_prportion: Tuple[float, float] = (0.5, 0.5)
-    model_image_size: Tuple[int, int] = (300, 300)
+def map_bbs_to_original_image(bbs: ModelPredictions, patches: List[ImagePatch]) -> dict:
+    """Maps the predicted bounding boxes from patches to the original image coordinates.
+
+    Args:
+        bbs (dict): Dictionary with four keys: num_detections, boxes, confidence, classes
+        patches (List[ImagePatch]): List of image patches used to predict
+
+    Returns:
+        dict: Mapped bounding boxes. A dictionary with four keys: num_detections, boxes, confidence, classes
+            The resulting bounding boxes are the ones with a prediction.
+    """
+    n_patches = len(patches)
+    num_detections = bbs.num_detections
+    boxes = bbs.boxes
+    confidence = bbs.confidence
+    classes = bbs.classes
+
+    final_boxes = []
+    final_confidence = []
+    final_classes = []
+    final_number_of_detections = 0
+    for i in range(n_patches):
+        num_detections_patch = num_detections[i]
+        final_number_of_detections += num_detections_patch
+        patch_boxes = patches[i].map_bbs_to_original_image_coordinates(
+            boxes[i, :num_detections_patch, :]
+        )
+        patch_confidences = confidence[i, :num_detections_patch]
+        patch_classes = classes[i, :num_detections_patch]
+
+        final_boxes.append(patch_boxes)
+        final_confidence.append(patch_confidences)
+        final_classes.append(patch_classes)
+
+    return ModelPredictions(
+        num_detections=final_number_of_detections,
+        boxes=np.concatenate(final_boxes).reshape(-1, 4),
+        confidence=np.concatenate(final_confidence).reshape(-1),
+        classes=np.concatenate(final_classes).reshape(-1),
+    )
 
 
-def sahi_predict(model, img: np.ndarray, config: SAHIConfig):
+def iou_of_boxes(box: np.ndarray, boxes: np.ndarray) -> np.ndarray:
+    """Calculates the Intersection over Union (IoU) of a box with a set of boxes.
+
+    Args:
+        box (np.ndarray): Box in format xywh
+        boxes (np.ndarray): Set of boxes in format xywh
+
+    Returns:
+        np.ndarray: IoU of the box with the set of boxes
+    """
+    x1 = np.maximum(box[0], boxes[:, 0])
+    y1 = np.maximum(box[1], boxes[:, 1])
+    x2 = np.minimum(box[0] + box[2], boxes[:, 0] + boxes[:, 2])
+    y2 = np.minimum(box[1] + box[3], boxes[:, 1] + boxes[:, 3])
+    intersection = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
+    union = box[2] * box[3] + boxes[:, 2] * boxes[:, 3] - intersection
+    eps = 1e-6
+    return intersection / (union + eps)
+
+
+def non_maximum_suppression(
+    boxes: np.ndarray, confidence: np.ndarray, iou_threshold: float
+) -> np.ndarray:
+    """Applies non-maximum suppression to the boxes.
+
+    Args:
+        boxes (np.ndarray): Bounding boxes
+        confidence (np.array): Confidence of the bounding boxes
+        iou_threshold (float): IoU threshold
+
+    Returns:
+        np.ndarray: Indices of the boxes after non-maximum suppression
+    """
+    indices = confidence.argsort()[::-1]
+    out = []
+    while len(indices) > 0:
+        i = indices[0]
+        out.append(i)
+        remaining_indices = indices[1:]
+        if len(remaining_indices) == 0:
+            break
+        iou = iou_of_boxes(boxes[i], boxes[remaining_indices])
+        indices = np.delete(remaining_indices, np.where(iou > iou_threshold))
+    return np.array(out)
+
+
+def multiclass_non_maximum_suppression(
+    bounding_boxes: ModelPredictions, iou_threshold: float
+) -> ModelPredictions:
+    """Applies non-maximum suppression to the bounding boxes per class.
+
+    Args:
+        bounding_boxes (ModelPredictions): Set of predictions
+        iou_threshold (float): IoU threshold
+
+    Returns:
+        ModelPredictions: Predictions after non-maximum suppression
+    """
+    boxes = bounding_boxes.boxes
+    confidence = bounding_boxes.confidence
+    classes = bounding_boxes.classes
+
+    out_boxes = []
+    out_confidences = []
+    out_classes = []
+    num_detections = 0
+    for class_ in np.unique(classes):
+        class_indices = np.where(classes == class_)[0]
+        class_boxes = boxes[class_indices]
+        class_confidence = confidence[class_indices]
+
+        indices = non_maximum_suppression(
+            class_boxes,
+            class_confidence,
+            iou_threshold=iou_threshold,
+        )
+        out_boxes.append(class_boxes[indices])
+        out_confidences.append(class_confidence[indices])
+        out_classes.append(class_ * np.ones_like(class_confidence[indices]))
+        num_detections += len(indices)
+
+    return ModelPredictions(
+        num_detections=num_detections,
+        boxes=np.concatenate(out_boxes).reshape(-1, 4),
+        confidence=np.concatenate(out_confidences).reshape(-1),
+        classes=np.concatenate(out_classes).reshape(-1),
+    )
+
+
+def keras_cv_predict(model, images: np.ndarray, batch_size: int) -> ModelPredictions:
+    """Predicts the bounding boxes of objects in the images using the model.
+
+    Useful function for using it together with functools.partial to create a model_predict function
+    to be used in sahi_predict.
+
+    Args:
+        model (Keras Model):
+        image (np.ndarray): Image to predict
+        batch_size (int): Batch size
+
+    Returns:
+        ModelPredictions: Predictions
+    """
+    model_raw_prediction = model.predict(images, batch_size=batch_size)
+    return ModelPredictions(
+        num_detections=model_raw_prediction["num_detections"],
+        boxes=model_raw_prediction["boxes"],
+        confidence=model_raw_prediction["confidence"],
+        classes=model_raw_prediction["classes"],
+    )
+
+
+def sahi_predict(
+    model_predict: Callable[[np.ndarray, int], ModelPredictions],
+    img: np.ndarray,
+    config: SAHIConfig,
+):
     """
     Predicts the bounding boxes of objects in the image using the SAHI algorithm.
     """
-    ## Image + Patch coordinates wrt to the original image
+
     patches = split_image_in_windows(
         img,
         patch_size=config.patch_size,
         overlapping_prportion=config.overlapping_prportion,
     )
+
+    patches = prepare_patches(patches, img, config)
+
     logger.debug(f"Number of patches: {len(patches)}")
-    for patch in patches:
-        patch.rescaling_preserving_aspect_ratio(
-            target_size=config.model_image_size
-        )
 
+    images_to_predict = np.concatenate(
+        [np.expand_dims(patch.target_img, 0) for patch in patches]
+    )
+    batch_size = len(images_to_predict)
+    if config.batch_size:
+        batch_size = config.batch_size
 
-    images_to_predict = np.concatenate([
-        np.expand_dims(patch.target_img, 0) for patch in patches
-    ] )
-    bbs = model.predict(images_to_predict, batch_size=len(images_to_predict))
+    model_prediction = model_predict(images_to_predict, batch_size)
 
-    n_patches = len(patches)
-    num_detections = bbs['num_detections']
-    boxes = bbs['boxes']
-    confidence = bbs['confidence']
-    classes = bbs['classes']
-    for i in range(n_patches):        
-        num_detections_patch = num_detections[i]
-        boxes[i][:num_detections_patch] = patches[i].map_bbs_to_original_image_coordinates(boxes[i][:num_detections_patch])
-        
-    boxes = boxes.reshape(-1, 4)
-    confidence = confidence.reshape(-1)
-    classes = classes.reshape(-1)
-        
-    return {
-        "num_detections": num_detections,
-        "boxes": boxes,
-        "confidence": confidence,
-        "classes": classes
-    }
-
-    
-    
-    ## Map the bounding boxes back to the original coordinates
-    bbs = map_bbs_to_original_image(bbs, patches)
-
-    ## Merge the bounding boxes
-    bbs = merge_bb_nms(bbs)
+    model_prediction = map_bbs_to_original_image(model_prediction, patches)
+    return multiclass_non_maximum_suppression(
+        model_prediction, iou_threshold=config.iou_threshold
+    )

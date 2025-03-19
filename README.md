@@ -1,10 +1,20 @@
 #  Slicing Aided Hyper Inference (SAHI)
-
 Simple and dependency free implmentation (just numpy and PIL) of SAHI
 
-## Example
-See the notebook []
+as presented in 
 
+[Slicing Aided Hyper Inference and Fine-tuning for Small Object Detection](https://arxiv.org/abs/2202.06934) 
+
+
+
+## Instalation
+It°s easier just copy the __init__.py file to your repo
+but 
+```bash
+pip install [-e] SAHI/
+```
+## Example
+[See the notebook](notebook/example.ipynb)
 
 ```python
 from sahi import SAHIConfig, keras_cv_predict, sahi_predict

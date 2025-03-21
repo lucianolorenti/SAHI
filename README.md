@@ -31,4 +31,4 @@ predictions = sahi_predict(
 )
 ```
 
-You can watch me struggling implement this this [here](https://youtu.be/ZZks0ezRuPc)
+You can watch me struggling implement this this [here](https://youtu.be/3BeGoQ3tf3Q)
